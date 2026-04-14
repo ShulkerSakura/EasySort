@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"minVersion": "0.4",
+	"package": "neko.shulker.easysort.client.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"AbstractContainerScreenMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

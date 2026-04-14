@@ -1,0 +1,33 @@
+{
+	"schemaVersion": 1,
+	"id": "easysort",
+	"version": "${version}",
+	"name": "EasySort",
+	"description": "A client-side mod that adds a keybinding to sort container inventories in the order of creative mode inventory tabs.",
+	"authors": [
+		"Shulker"
+	],
+	"contact": {
+		"homepage": "https://github.com/ShulkerSakura"
+	},
+	"license": "MIT",
+	"icon": "assets/easysort/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"neko.shulker.easysort.client.EasySortClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "easysort.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.1",
+		"minecraft": "~26.2-",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
