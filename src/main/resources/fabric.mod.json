@@ -10,7 +10,7 @@
 	"contact": {
 		"homepage": "https://github.com/ShulkerSakura"
 	},
-	"license": "MIT",
+	"license": "GPLv3",
 	"icon": "assets/easysort/icon.png",
 	"environment": "client",
 	"entrypoints": {
