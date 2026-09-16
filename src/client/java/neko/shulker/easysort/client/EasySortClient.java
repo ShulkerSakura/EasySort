@@ -25,7 +25,7 @@ public class EasySortClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		LOG.info("[EasySort] Client mod initializing...");
-		sortKey = new KeyMapping("key.easysort.sort", InputConstants.Type.KEYSYM, InputConstants.KEY_R, EASYSORT);
+		sortKey = new KeyMapping("key.easysort.sort", InputConstants.Type.KEYBOARD, InputConstants.KEY_R, EASYSORT);
 		KeyMappingHelper.registerKeyMapping(sortKey);
 		LOG.info("[EasySort] KeyMapping registered: {}", sortKey.getName());
 	}
