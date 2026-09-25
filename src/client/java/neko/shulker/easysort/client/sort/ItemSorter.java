@@ -8,6 +8,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.item.BundleItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
@@ -86,6 +87,11 @@ public class ItemSorter {
 				for (int j = i + 1; j < endSlot && j < menu.slots.size(); j++) {
 					ItemStack stack2 = menu.getSlot(j).getItem();
 					if (stack2.isEmpty()) continue;
+
+					// 收纳袋的槽位点击会尝试收纳光标物品，而不是合并物品堆
+					if (stack1.getItem() instanceof BundleItem || stack2.getItem() instanceof BundleItem) {
+						continue;
+					}
 
 					// 检查是否可以合并
 					if (ItemStack.isSameItemSameComponents(stack1, stack2)) {
@@ -188,6 +194,12 @@ public class ItemSorter {
 			// 检查目标槽位当前是什么物品
 			ItemStack targetStack = menu.getSlot(targetSlot).getItem();
 
+			// 点击未满收纳袋会把光标物品放入袋中，而不是交换槽位
+			if (!targetStack.isEmpty() && targetStack.getItem() instanceof BundleItem) {
+				i++;
+				continue;
+			}
+
 			// 如果目标槽位已经有正确的物品类型，跳过
 			if (!targetStack.isEmpty() && isSameItemType(targetStack, info.stack)) {
 				i++;
@@ -198,6 +210,10 @@ public class ItemSorter {
 			int currentSlot = findSlotWithItem(menu, info.stack, startSlot, endSlot, i);
 
 			if (currentSlot >= 0 && currentSlot != targetSlot) {
+				if (menu.getSlot(currentSlot).getItem().getItem() instanceof BundleItem) {
+					i++;
+					continue;
+				}
 				// 移动物品到目标位置
 				moveItem(menu, gameMode, currentSlot, targetSlot, mc);
 				processedCount++;
