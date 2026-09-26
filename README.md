@@ -29,27 +29,6 @@ The hotkey can be changed in Game Settings > Controls > Key Binds.
 - Brewing Stands
 - And other standard containers
 
-## Requirements
-
-- Minecraft: 1.26.2+
-- Fabric Loader: 0.19.1+
-- Fabric API: Any version
-- Java: 25+
-
-## Installation
-
-1. Install [Fabric Loader](https://fabricmc.net/use/)
-2. Download and install [Fabric API](https://modrinth.com/mod/fabric-api)
-3. Place this mod's `.jar` file into the `.minecraft/mods` folder
-
-## Building
-
-```bash
-./gradlew build
-```
-
-The built mod file will be located in the `build/libs/` directory.
-
 ## License
 
 This project is open source under the [MIT License](LICENSE).
