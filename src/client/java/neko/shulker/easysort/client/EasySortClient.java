@@ -1,16 +1,9 @@
 package neko.shulker.easysort.client;
 
-import neko.shulker.easysort.client.sort.ItemSorter;
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.resources.Identifier;
-import net.minecraft.world.Container;
-import net.minecraft.world.inventory.ChestMenu;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

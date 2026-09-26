@@ -7,6 +7,7 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -29,27 +30,48 @@ public class AbstractContainerScreenMixin {
 		// 检查是否是排序键按下，使用 KeyMapping 的 matches 方法来检测
 		if (EasySortClient.sortKey != null && EasySortClient.sortKey.matches(keyEvent)) {
 			EasySortClient.LOG.info("[EasySort] Sort key pressed in container via keyPressed!");
-
-			AbstractContainerScreen<?> screen = (AbstractContainerScreen<?>) (Object) this;
-			Container container = getContainerFromScreen(screen);
-
-			if (container != null) {
-				EasySortClient.LOG.info("[EasySort] Sorting container...");
-				// 使用新的排序方法，传递菜单和游戏模式以同步到服务器
-				Minecraft mc = Minecraft.getInstance();
-				if (mc.gameMode != null) {
-					ItemSorter.sortContainer(container, screen.getMenu(), mc.gameMode);
-				} else {
-					// 单人游戏或本地游戏
-					ItemSorter.sortContainer(container);
-				}
-			} else {
-				EasySortClient.LOG.info("[EasySort] Container is null, cannot sort. Menu type: {}",
-					screen.getMenu().getClass().getSimpleName());
-			}
-
+			sortCurrentContainer((AbstractContainerScreen<?>) (Object) this);
 			cir.setReturnValue(true);
 		}
+	}
+
+	// 键位可以绑定到鼠标按键（与原版键位界面一致），因此这里也要处理鼠标点击。
+	// 屏幕打开时 MouseHandler 不会调用 KeyMapping.set/click（鼠标键），只能通过本注入检测。
+	@Inject(method = "mouseClicked", at = @At("HEAD"), cancellable = true)
+	private void onMouseClicked(MouseButtonEvent event, boolean doubleClick, CallbackInfoReturnable<Boolean> cir) {
+		if (EasySortClient.sortKey != null && EasySortClient.sortKey.matchesMouse(event)) {
+			EasySortClient.LOG.info("[EasySort] Sort key clicked in container via mouseClicked!");
+			// 只有真正完成整理时才吞掉这次点击，避免在无法整理的界面里屏蔽正常操作
+			if (sortCurrentContainer((AbstractContainerScreen<?>) (Object) this)) {
+				cir.setReturnValue(true);
+			}
+		}
+	}
+
+	/**
+	 * 整理当前屏幕对应的容器
+	 *
+	 * @return 是否找到了可整理的容器并执行了整理
+	 */
+	private boolean sortCurrentContainer(AbstractContainerScreen<?> screen) {
+		Container container = getContainerFromScreen(screen);
+
+		if (container == null) {
+			EasySortClient.LOG.info("[EasySort] Container is null, cannot sort. Menu type: {}",
+				screen.getMenu().getClass().getSimpleName());
+			return false;
+		}
+
+		EasySortClient.LOG.info("[EasySort] Sorting container...");
+		// 使用新的排序方法，传递菜单和游戏模式以同步到服务器
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.gameMode != null) {
+			ItemSorter.sortContainer(container, screen.getMenu(), mc.gameMode);
+		} else {
+			// 单人游戏或本地游戏
+			ItemSorter.sortContainer(container);
+		}
+		return true;
 	}
 
 	/**

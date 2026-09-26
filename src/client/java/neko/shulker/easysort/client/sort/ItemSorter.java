@@ -1,5 +1,6 @@
 package neko.shulker.easysort.client.sort;
 
+import neko.shulker.easysort.client.EasySortClient;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.world.Container;
@@ -7,7 +8,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
-import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BundleItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -16,6 +17,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class ItemSorter {
+
+	/** 每个 tick 最多执行的移动次数，避免一次性发送过多点击包 */
+	private static final int MOVES_PER_TICK = 3;
+	/** 整次整理的步数上限，防止极端情况下无限循环 */
+	private static final int MAX_STEPS = 300;
+
+	/** 是否有整理正在进行中。用于忽略重复触发（例如按键自动重复） */
+	private static boolean sorting = false;
 
 	/**
 	 * 对容器进行排序
@@ -27,232 +36,233 @@ public class ItemSorter {
 		}
 
 		Minecraft mc = Minecraft.getInstance();
-		if (mc.player == null) {
+		Player player = mc.player;
+		if (player == null) {
 			return;
 		}
 
-		// 判断是否是玩家背包
-		boolean isPlayerInventory = container instanceof Inventory;
+		// 已有整理在进行：忽略重复触发，避免多条点击链互相干扰导致状态错乱
+		if (sorting) {
+			return;
+		}
+		// 光标上有物品时状态不确定，直接放弃
+		if (!menu.getCarried().isEmpty()) {
+			return;
+		}
+		// 只作用于当前真正打开的菜单
+		if (menu != player.containerMenu) {
+			return;
+		}
+
 		int startSlot;
 		int endSlot;
 
-		if (isPlayerInventory && menu instanceof InventoryMenu) {
+		if (container instanceof Inventory) {
 			// 玩家背包：只整理主背包区域（槽位 9-35）
-			// 排除快捷栏（0-8）、装备栏（36-39）、副手格（40）、合成格（41-44）
-			startSlot = InventoryMenu.INV_SLOT_START; // 9
-			endSlot = InventoryMenu.INV_SLOT_END;     // 36
-		} else if (isPlayerInventory && !(menu instanceof InventoryMenu)) {
-			// 创造模式背包：只整理主背包区域（槽位 9-35）
-			// 创造模式背包槽位：0-8 快捷栏，9-35 主背包，36-39 装备，40 副手
-			// 通过判断菜单不是 InventoryMenu 来识别创造模式
+			// 排除快捷栏、装备栏、副手格与合成格
 			startSlot = 9;
 			endSlot = 36;
 		} else {
-			// 普通容器：整理全部
+			// 普通容器：整理全部容器槽位
 			startSlot = 0;
 			endSlot = container.getContainerSize();
 		}
 
-		int containerSize = endSlot - startSlot;
-
-		// 第一步：合并同种物品
-		mergeAllStacks(menu, gameMode, startSlot, endSlot, mc);
-
-		// 第二步：在下一tick执行排序
-		final int finalStartSlot = startSlot;
-		final int finalEndSlot = endSlot;
-		mc.execute(() -> {
-			performSort(menu, gameMode, finalStartSlot, finalEndSlot, mc);
-		});
-	}
-
-	/**
-	 * 合并所有可以合并的物品堆
-	 */
-	private static void mergeAllStacks(AbstractContainerMenu menu, MultiPlayerGameMode gameMode,
-									   int startSlot, int endSlot, Minecraft mc) {
-		Player player = (Player) mc.player;
-		boolean merged;
-
-		// 重复合并直到没有可以合并的物品
-		do {
-			merged = false;
-			for (int i = startSlot; i < endSlot && i < menu.slots.size(); i++) {
-				ItemStack stack1 = menu.getSlot(i).getItem();
-				if (stack1.isEmpty() || stack1.getCount() >= stack1.getMaxStackSize()) {
-					continue; // 空槽位或已满
-				}
-
-				// 寻找可以合并的物品
-				for (int j = i + 1; j < endSlot && j < menu.slots.size(); j++) {
-					ItemStack stack2 = menu.getSlot(j).getItem();
-					if (stack2.isEmpty()) continue;
-
-					// 收纳袋的槽位点击会尝试收纳光标物品，而不是合并物品堆
-					if (stack1.getItem() instanceof BundleItem || stack2.getItem() instanceof BundleItem) {
-						continue;
-					}
-
-					// 检查是否可以合并
-					if (ItemStack.isSameItemSameComponents(stack1, stack2)) {
-						int space = stack1.getMaxStackSize() - stack1.getCount();
-						if (space > 0) {
-							// 将stack2移动到stack1
-							moveItemPartial(menu, gameMode, j, i, mc);
-							merged = true;
-							break; // 重新从头开始
-						}
-					}
-				}
-				if (merged) break;
-			}
-		} while (merged);
-	}
-
-	/**
-	 * 部分移动物品（用于合并）
-	 */
-	private static void moveItemPartial(AbstractContainerMenu menu, MultiPlayerGameMode gameMode,
-										int sourceSlot, int targetSlot, Minecraft mc) {
-		Player player = (Player) mc.player;
-
-		// 拿起源槽位的物品
-		gameMode.handleContainerInput(menu.containerId, sourceSlot, 0, ContainerInput.PICKUP, player);
-
-		// 尝试放到目标槽位（会尽可能合并）
-		gameMode.handleContainerInput(menu.containerId, targetSlot, 0, ContainerInput.PICKUP, player);
-
-		// 如果还有剩余，放回源槽位
-		ItemStack carried = menu.getCarried();
-		if (!carried.isEmpty()) {
-			gameMode.handleContainerInput(menu.containerId, sourceSlot, 0, ContainerInput.PICKUP, player);
-		}
-	}
-
-	/**
-	 * 执行排序操作
-	 */
-	private static void performSort(AbstractContainerMenu menu, MultiPlayerGameMode gameMode,
-									int startSlot, int endSlot, Minecraft mc) {
-		if (mc.player == null) {
+		startSlot = Math.max(0, startSlot);
+		endSlot = Math.min(endSlot, menu.slots.size());
+		if (endSlot - startSlot < 2) {
 			return;
 		}
 
-		// 收集当前容器中的物品
-		List<SlotInfo> slotInfos = new ArrayList<>();
-		for (int i = startSlot; i < endSlot && i < menu.slots.size(); i++) {
-			ItemStack stack = menu.getSlot(i).getItem();
-			if (!stack.isEmpty()) {
-				slotInfos.add(new SlotInfo(i, stack));
-			}
-		}
-
-		if (slotInfos.isEmpty()) {
-			return;
-		}
-
-		// 按物品类型和数量排序
-		slotInfos.sort((a, b) -> {
-			int itemCompare = Item.getId(a.stack.getItem()) - Item.getId(b.stack.getItem());
-			if (itemCompare != 0) {
-				return itemCompare;
-			}
-			return b.stack.getCount() - a.stack.getCount();
-		});
-
-		// 执行排序操作
-		executeSortMoves(menu, gameMode, slotInfos, startSlot, endSlot, mc, 0);
+		sorting = true;
+		Session session = new Session(mc, menu, gameMode, player, startSlot, endSlot);
+		mc.execute(() -> run(session));
 	}
 
 	/**
-	 * 执行排序移动操作
+	 * 整理主循环：每个 tick 执行若干次移动，直到完成或中止
 	 */
-	private static void executeSortMoves(AbstractContainerMenu menu, MultiPlayerGameMode gameMode,
-										 List<SlotInfo> sortedSlots, int startSlot, int endSlot,
-										 Minecraft mc, int currentIndex) {
-		if (mc.player == null) {
+	private static void run(Session s) {
+		if (!stillValid(s)) {
+			sorting = false;
 			return;
 		}
 
-		int processedCount = 0;
-		int i = currentIndex;
+		int ops = 0;
+		boolean aborted = false;
 
-		while (i < sortedSlots.size() && processedCount < 3) {
-			SlotInfo info = sortedSlots.get(i);
-			int targetSlot = startSlot + i;
-
-			if (targetSlot >= endSlot || targetSlot >= menu.slots.size()) {
+		while (ops < MOVES_PER_TICK && s.steps < MAX_STEPS) {
+			// 每次移动前后光标都必须为空，否则说明状态已经错乱
+			if (!s.menu.getCarried().isEmpty()) {
+				aborted = true;
 				break;
 			}
 
-			// 如果物品已经在正确的位置，跳过
-			if (info.originalSlot == targetSlot) {
-				i++;
+			int[] pair = findMergePair(s);
+			if (pair != null) {
+				if (!mergeStacks(s, pair[0], pair[1])) {
+					aborted = true;
+					break;
+				}
+				s.steps++;
+				ops++;
 				continue;
 			}
 
-			// 检查目标槽位当前是什么物品
-			ItemStack targetStack = menu.getSlot(targetSlot).getItem();
-
-			// 点击未满收纳袋会把光标物品放入袋中，而不是交换槽位
-			if (!targetStack.isEmpty() && targetStack.getItem() instanceof BundleItem) {
-				i++;
+			int result = sortStep(s);
+			if (result == 1) {
+				s.steps++;
+				ops++;
 				continue;
 			}
+			if (result < 0) {
+				aborted = true;
+			}
+			break;
+		}
 
-			// 如果目标槽位已经有正确的物品类型，跳过
-			if (!targetStack.isEmpty() && isSameItemType(targetStack, info.stack)) {
-				i++;
+		if (!aborted && s.steps < MAX_STEPS && ops >= MOVES_PER_TICK) {
+			// 还有工作要做，下一 tick 继续
+			s.mc.execute(() -> run(s));
+			return;
+		}
+
+		sorting = false;
+		if (aborted || !isSorted(s)) {
+			EasySortClient.LOG.warn("[EasySort] 整理中止或未完成 (steps={}, carried={})",
+				s.steps, !s.menu.getCarried().isEmpty());
+		} else {
+			EasySortClient.LOG.info("[EasySort] 整理完成 (steps={})", s.steps);
+		}
+	}
+
+	/**
+	 * 检查整理会话是否仍然有效（玩家、菜单没有变化）
+	 */
+	private static boolean stillValid(Session s) {
+		return s.mc.player != null
+			&& s.mc.player == s.player
+			&& s.mc.player.containerMenu == s.menu
+			&& s.menu.slots.size() == s.slotCount;
+	}
+
+	/**
+	 * 查找一对可以合并的同类物品
+	 * 收纳袋 stacksTo(1)，永远无法合并，因此跳过
+	 */
+	private static int[] findMergePair(Session s) {
+		for (int i = s.startSlot; i < s.endSlot; i++) {
+			ItemStack a = s.menu.getSlot(i).getItem();
+			if (a.isEmpty() || a.getItem() instanceof BundleItem) {
 				continue;
 			}
-
-			// 找到当前应该移动的物品在哪个槽位
-			int currentSlot = findSlotWithItem(menu, info.stack, startSlot, endSlot, i);
-
-			if (currentSlot >= 0 && currentSlot != targetSlot) {
-				if (menu.getSlot(currentSlot).getItem().getItem() instanceof BundleItem) {
-					i++;
+			if (a.getCount() >= a.getMaxStackSize()) {
+				continue;
+			}
+			for (int j = i + 1; j < s.endSlot; j++) {
+				ItemStack b = s.menu.getSlot(j).getItem();
+				if (b.isEmpty() || b.getItem() instanceof BundleItem) {
 					continue;
 				}
-				// 移动物品到目标位置
-				moveItem(menu, gameMode, currentSlot, targetSlot, mc);
-				processedCount++;
+				if (ItemStack.isSameItemSameComponents(a, b)) {
+					return new int[]{i, j};
+				}
 			}
-			i++;
 		}
-
-		// 如果还有更多物品需要处理，安排下一tick继续
-		if (i < sortedSlots.size()) {
-			final int nextIndex = i;
-			mc.execute(() -> {
-				executeSortMoves(menu, gameMode, sortedSlots, startSlot, endSlot, mc, nextIndex);
-			});
-		}
+		return null;
 	}
 
 	/**
-	 * 检查两个物品是否是同一种类型（不包括数量）
+	 * 把 source 槽位的物品尽量合并进 target 槽位，剩余的放回 source
 	 */
-	private static boolean isSameItemType(ItemStack a, ItemStack b) {
-		return ItemStack.isSameItemSameComponents(a, b);
+	private static boolean mergeStacks(Session s, int target, int source) {
+		if (!s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+		click(s, source);
+		if (s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+		click(s, target);
+		if (!s.menu.getCarried().isEmpty()) {
+			// 有剩余，放回 source
+			click(s, source);
+			if (!s.menu.getCarried().isEmpty()) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
-	 * 在容器中找到指定物品的槽位
+	 * 执行一次排序移动，返回 1 表示完成了一次移动，0 表示已经有序，-1 表示无法继续
 	 */
-	private static int findSlotWithItem(AbstractContainerMenu menu, ItemStack target,
-										int startSlot, int endSlot, int startIndex) {
-		// 首先尝试从startIndex开始查找
-		for (int i = startSlot + startIndex; i < endSlot && i < menu.slots.size(); i++) {
-			ItemStack stack = menu.getSlot(i).getItem();
-			if (!stack.isEmpty() && isSameItemType(stack, target)) {
-				return i;
+	private static int sortStep(Session s) {
+		List<ItemStack> desired = collectSorted(s);
+		int n = desired.size();
+
+		for (int k = 0; k < n; k++) {
+			int target = s.startSlot + k;
+			ItemStack want = desired.get(k);
+			ItemStack cur = s.menu.getSlot(target).getItem();
+
+			if (isSameStack(cur, want)) {
+				continue;
+			}
+
+			// 多重集守恒保证 want 一定存在于 target 及其之后的位置
+			int source = findStack(s, want, target, s.endSlot);
+			if (source < 0) {
+				return -1;
+			}
+
+			if (cur.isEmpty()) {
+				return moveToEmpty(s, source, target) ? 1 : -1;
+			}
+
+			// 目标槽已被占用：优先用空槽做中转，这样对收纳袋同样安全
+			int buffer = findBuffer(s, target, source, cur);
+			if (buffer >= 0) {
+				return swapViaBuffer(s, target, source, buffer) ? 1 : -1;
+			}
+
+			// 没有空槽可用时，退化为直接交换（收纳袋与同类物品不可直接交换）
+			if (canDirectSwap(cur, want)) {
+				return directSwap(s, target, source) ? 1 : -1;
+			}
+
+			return -1;
+		}
+		return 0;
+	}
+
+	/**
+	 * 收集整理范围内的物品，按物品 ID 升序、数量降序排列
+	 */
+	private static List<ItemStack> collectSorted(Session s) {
+		List<ItemStack> stacks = new ArrayList<>();
+		for (int i = s.startSlot; i < s.endSlot; i++) {
+			ItemStack stack = s.menu.getSlot(i).getItem();
+			if (!stack.isEmpty()) {
+				stacks.add(stack.copy());
 			}
 		}
-		// 如果没找到，从startSlot开始查找
-		for (int i = startSlot; i < startSlot + startIndex && i < endSlot && i < menu.slots.size(); i++) {
-			ItemStack stack = menu.getSlot(i).getItem();
-			if (!stack.isEmpty() && isSameItemType(stack, target)) {
+		stacks.sort((a, b) -> {
+			int byId = Item.getId(a.getItem()) - Item.getId(b.getItem());
+			if (byId != 0) {
+				return byId;
+			}
+			return b.getCount() - a.getCount();
+		});
+		return stacks;
+	}
+
+	/**
+	 * 在 [from, end) 范围内查找与 want 完全相同的物品堆
+	 */
+	private static int findStack(Session s, ItemStack want, int from, int end) {
+		for (int i = Math.max(from, s.startSlot); i < end; i++) {
+			if (isSameStack(s.menu.getSlot(i).getItem(), want)) {
 				return i;
 			}
 		}
@@ -260,35 +270,170 @@ public class ItemSorter {
 	}
 
 	/**
-	 * 移动物品从sourceSlot到targetSlot
+	 * 查找一个可用于中转的空槽位
 	 */
-	private static void moveItem(AbstractContainerMenu menu, MultiPlayerGameMode gameMode,
-								 int sourceSlot, int targetSlot, Minecraft mc) {
-		Player player = (Player) mc.player;
-
-		// 拿起源槽位的物品
-		gameMode.handleContainerInput(menu.containerId, sourceSlot, 0, ContainerInput.PICKUP, player);
-		// 放到目标槽位
-		gameMode.handleContainerInput(menu.containerId, targetSlot, 0, ContainerInput.PICKUP, player);
-
-		// 如果目标槽位原来有物品，现在会在光标上，需要处理
-		ItemStack carried = menu.getCarried();
-		if (!carried.isEmpty()) {
-			// 将光标上的物品放回源槽位
-			gameMode.handleContainerInput(menu.containerId, sourceSlot, 0, ContainerInput.PICKUP, player);
+	private static int findBuffer(Session s, int avoidA, int avoidB, ItemStack toHold) {
+		// 优先使用整理范围内的空槽
+		for (int i = s.startSlot; i < s.endSlot; i++) {
+			if (i == avoidA || i == avoidB) {
+				continue;
+			}
+			if (s.menu.getSlot(i).getItem().isEmpty()) {
+				return i;
+			}
 		}
+
+		// 范围内没有空槽时，借用玩家背包中的空槽（快捷栏、副手等）
+		// 用 container instanceof Inventory 排除合成结果槽与创造模式的销毁槽
+		for (int i = 0; i < s.menu.slots.size(); i++) {
+			if (i == avoidA || i == avoidB) {
+				continue;
+			}
+			Slot slot = s.menu.getSlot(i);
+			if (!slot.getItem().isEmpty()) {
+				continue;
+			}
+			if (!(slot.container instanceof Inventory)) {
+				continue;
+			}
+			if (!slot.mayPlace(toHold)) {
+				continue;
+			}
+			return i;
+		}
+		return -1;
 	}
 
 	/**
-	 * 槽位信息类
+	 * 把 source 槽位的物品移动到空的目标槽位
+	 * 目标槽为空时不存在收纳袋吸物品、同类合并等副作用
 	 */
-	private static class SlotInfo {
-		final int originalSlot;
-		final ItemStack stack;
+	private static boolean moveToEmpty(Session s, int source, int target) {
+		if (!s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+		click(s, source);
+		if (s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+		click(s, target);
+		if (!s.menu.getCarried().isEmpty()) {
+			// 目标槽没有完全接收，回滚
+			click(s, source);
+			return false;
+		}
+		return true;
+	}
 
-		SlotInfo(int originalSlot, ItemStack stack) {
-			this.originalSlot = originalSlot;
-			this.stack = stack.copy();
+	/**
+	 * 借助一个空的中转槽，交换 target 与 source 两个槽位的内容
+	 * 共 6 次点击，每一次"放入"都发生在空槽上，光标在每个边界都为空，
+	 * 因此不会触发收纳袋的吸入行为，也不会触发同类合并
+	 */
+	private static boolean swapViaBuffer(Session s, int target, int source, int buffer) {
+		if (!s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+
+		click(s, target);                          // 光标 = 目标槽物品
+		click(s, buffer);                          // 存入空的中转槽
+		if (!s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+
+		click(s, source);                          // 光标 = 待移动物品
+		click(s, target);                          // 放入已腾空的目标槽
+		if (!s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+
+		click(s, buffer);                          // 取回原目标槽物品
+		click(s, source);                          // 放回已腾空的源槽
+		return s.menu.getCarried().isEmpty();
+	}
+
+	/**
+	 * 直接交换两个槽位（仅在完全没有空槽可用时使用）
+	 * 同一物品的不同数量堆会走合并分支，收纳袋会吸物品，因此都被排除
+	 */
+	private static boolean directSwap(Session s, int target, int source) {
+		if (!s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+		ItemStack targetBefore = s.menu.getSlot(target).getItem().copy();
+		ItemStack sourceBefore = s.menu.getSlot(source).getItem().copy();
+
+		click(s, source);
+		if (s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+		click(s, target);
+		if (!s.menu.getCarried().isEmpty()) {
+			click(s, source);
+		}
+		if (!s.menu.getCarried().isEmpty()) {
+			return false;
+		}
+
+		// 槽位可能因 mayPlace 失败而拒绝放置，这里确认交换确实发生了
+		return isSameStack(s.menu.getSlot(target).getItem(), sourceBefore)
+			&& isSameStack(s.menu.getSlot(source).getItem(), targetBefore);
+	}
+
+	private static boolean canDirectSwap(ItemStack a, ItemStack b) {
+		return !(a.getItem() instanceof BundleItem)
+			&& !(b.getItem() instanceof BundleItem)
+			&& !ItemStack.isSameItemSameComponents(a, b);
+	}
+
+	/**
+	 * 检查整理范围内是否已经完全有序
+	 */
+	private static boolean isSorted(Session s) {
+		List<ItemStack> desired = collectSorted(s);
+		for (int k = 0; k < desired.size(); k++) {
+			if (!isSameStack(s.menu.getSlot(s.startSlot + k).getItem(), desired.get(k))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * 判断两个物品堆是否完全相同（类型、组件与数量）
+	 */
+	private static boolean isSameStack(ItemStack a, ItemStack b) {
+		return !a.isEmpty() && !b.isEmpty()
+			&& a.getCount() == b.getCount()
+			&& ItemStack.isSameItemSameComponents(a, b);
+	}
+
+	private static void click(Session s, int slot) {
+		s.gameMode.handleContainerInput(s.menu.containerId, slot, 0, ContainerInput.PICKUP, s.player);
+	}
+
+	/**
+	 * 一次整理的会话状态
+	 */
+	private static class Session {
+		final Minecraft mc;
+		final AbstractContainerMenu menu;
+		final MultiPlayerGameMode gameMode;
+		final Player player;
+		final int startSlot;
+		final int endSlot;
+		final int slotCount;
+		int steps;
+
+		Session(Minecraft mc, AbstractContainerMenu menu, MultiPlayerGameMode gameMode, Player player,
+				int startSlot, int endSlot) {
+			this.mc = mc;
+			this.menu = menu;
+			this.gameMode = gameMode;
+			this.player = player;
+			this.startSlot = startSlot;
+			this.endSlot = endSlot;
+			this.slotCount = menu.slots.size();
 		}
 	}
 
